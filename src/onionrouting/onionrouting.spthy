@@ -1,0 +1,200 @@
+theory onionrouting begin 
+
+/*
+ *  Author: Denis D'Ambrosi
+ *  Theory file: onionrouting.spthy
+ *  Status: Working (Tested with Tamarin 1.6.1)
+ */
+
+builtins: asymmetric-encryption, hashing, symmetric-encryption, diffie-hellman, signing
+
+heuristic: o "onionroutingoracle.py"
+
+rule ModelOutput :
+    [ ModelOut(sender, receiver, data, flow) ]
+    -->
+    [ Comm(sender, receiver, data, flow) ]
+
+rule ModelInput :
+    [ Comm(sender, receiver, data, flow) ]
+    --> 
+    [ ModelIn(sender, receiver, data, flow) ]
+
+rule DishonestModelInput :
+    [ Comm(sender, receiver, data, flow) ]
+    --[ DishonestReceive(receiver) ]->
+    [
+        ModelIn(sender, receiver, data, flow),
+        Out(<sender, data>)
+    ]
+
+rule DishonestModelOutput :
+    [ K(sender), K(receiver), K(data), K(flow) ]
+    --[ DishonestSend(sender) ]->
+    [ ModelOut(sender, receiver, data, flow) ]
+
+restriction OnlyCompromisedNodesCanBeDishonest :
+    "(All #t node . DishonestSend(node) @ #t ==> Ex #d . Dishonest(node) @ #d & #d < #t) &
+    (All #t node . DishonestReceive(node) @ #t ==> Ex #d . Dishonest(node) @ #d & #d < #t)"
+
+rule InitialiseServiceNode :
+    let
+    serviceNode_X25519_pubKey = 'g'^~serviceNode_X25519_prKey
+    serviceNode_ED25519_pubKey = pk(~serviceNode_ED25519_prKey)
+    in
+    [
+        Fr(~serviceNode_X25519_prKey),
+        Fr(~serviceNode_ED25519_prKey),
+        Fr(~serviceNode_IP)
+    ]
+    -->
+    [
+        !ServiceNode(serviceNode_X25519_pubKey, ~serviceNode_X25519_prKey, serviceNode_ED25519_pubKey, ~serviceNode_ED25519_prKey, ~serviceNode_IP),
+        Out (<serviceNode_X25519_pubKey, serviceNode_ED25519_pubKey, ~serviceNode_IP>)
+    ]
+
+rule DishonestServiceNode :
+    [ !ServiceNode(serviceNode_X25519_pubKey, serviceNode_X25519_prKey, serviceNode_ED25519_pubKey, serviceNode_ED25519_prKey, serviceNode_IP) ]
+    --[ Dishonest(serviceNode_IP) ]->
+    [ Out(<serviceNode_X25519_pubKey, serviceNode_X25519_prKey, serviceNode_ED25519_pubKey, serviceNode_ED25519_prKey, serviceNode_IP>) ]
+
+rule InitialiseClient :
+    [ Fr(~sender_IP) ]
+    -->
+    [ !Client(~sender_IP) ]
+
+rule CreateMessage :
+    [
+        !Client (sender_IP),
+        !ServiceNode(receivingNode_X25519_pubKey, receivingNode_X25519_prKey, receivingNode_ED25519_pubKey, receivingNode_ED25519_prKey, receivingNode_IP),
+        Fr (~message)
+    ]
+    -->
+    [
+        Data(sender_IP, receivingNode_ED25519_pubKey, ~message),
+        NeedPath(sender_IP, receivingNode_ED25519_pubKey)
+    ]
+
+rule CreatePath :
+    [
+        NeedPath (sender_IP, receivingNode_ED25519_pubKey),
+        !ServiceNode(firstNode_X25519_pubKey, firstNode_X25519_prKey, firstNode_ED25519_pubKey, firstNode_ED25519_prKey, firstNode_IP),
+        !ServiceNode (secondNode_X25519_pubKey, secondNode_X25519_prKey, secondNode_ED25519_pubKey, secondNode_ED25519_prKey, secondNode_IP),
+        !ServiceNode(receivingNode_X25519_pubKey, receivingNode_X25519_prKey, receivingNode_ED25519_pubKey, receivingNode_ED25519_prKey, receivingNode_IP)
+    ]
+    --[
+        Neq(firstNode_ED25519_pubKey, secondNode_ED25519_pubKey),
+        Neq(secondNode_ED25519_pubKey, receivingNode_X25519_pubKey),
+        Neq(firstNode_ED25519_pubKey, receivingNode_ED25519_pubKey)
+    ]->
+    [ OnionPath(sender_IP, firstNode_ED25519_pubKey, secondNode_ED25519_pubKey, receivingNode_ED25519_pubKey) ]
+
+restriction Inequality :
+    "All x #i . Neq(x,x) @ #i ==> F"
+
+rule SendMessage :
+    let
+        dh_pubKey_for_receivingNode = 'g'^~dh_prKey_for_receivingNode
+        symKey_receivingNode = receivingNode_X25519_pubKey^~dh_prKey_for_receivingNode
+        dh_pubKey_for_firstNode = 'g'^~dh_prKey_for_firstNode
+        symKey_firstNode = firstNode_X25519_pubKey^~dh_prKey_for_firstNode
+        dh_pubKey_for_secondNode = 'g'^~dh_prKey_for_secondNode
+        symKey_secondNode = secondNode_X25519_pubKey^~dh_prKey_for_secondNode
+        layer_for_receivingNode = <senc(<'store', message>, symKey_receivingNode), dh_pubKey_for_receivingNode, receivingNode_ED25519_pubKey>
+        layer_for_secondNode = <senc(layer_for_receivingNode, symKey_secondNode), dh_pubKey_for_secondNode, secondNode_ED25519_pubKey>
+        layer_for_firstNode = <senc(layer_for_secondNode, symKey_firstNode), dh_pubKey_for_firstNode, firstNode_ED25519_pubKey>
+    in
+    [
+        Data(sender_IP, receivingNode_ED25519_pubKey, message),
+        OnionPath(sender_IP, firstNode_ED25519_pubKey, secondNode_ED25519_pubKey, receivingNode_ED25519_pubKey),
+        !ServiceNode(firstNode_X25519_pubKey, firstNode_X25519_prKey, firstNode_ED25519_pubKey, firstNode_ED25519_prKey, firstNode_IP),
+        !ServiceNode(secondNode_X25519_pubKey, secondNode_X25519_prKey, secondNode_ED25519_pubKey, secondNode_ED25519_prKey, secondNode_IP),
+        !ServiceNode(receivingNode_X25519_pubKey, receivingNode_X25519_prKey, receivingNode_ED25519_pubKey, receivingNode_ED25519_prKey, receivingNode_IP),
+        Fr(~dh_prKey_for_receivingNode),
+        Fr(~dh_prKey_for_firstNode),
+        Fr(~dh_prKey_for_secondNode),
+        Fr(~flow)
+    ]
+    --[
+        MessageSent (sender_IP, receivingNode_IP, message),
+        MessageSentThroughPath(sender_IP, firstNode_IP, secondNode_IP, receivingNode_IP),
+        Sender(sender_IP)
+    ]->
+    [ ModelOut(sender_IP, firstNode_IP, layer_for_firstNode, ~flow) ]
+
+restriction NotMoreThanOneDishonestNodePerPath :
+    "All sender guard proxy receiver #t .
+        MessageSentThroughPath(sender, guard, proxy, receiver) @ #t
+        ==>
+        not(
+            (Ex #x #y . (Dishonest(guard) @ #x & Dishonest(proxy) @ #y)) |
+            (Ex #x #y . (Dishonest(guard) @ #x & Dishonest(receiver) @ #y)) |
+            (Ex #x #y . (Dishonest(proxy) @ #x & Dishonest(receiver) @ #y))
+        )"
+
+rule ForwardMessage :
+    let
+        symKey = dh_pubKey^serviceNode_X25519_prKey
+        data_for_inner_layer = <encryptedData, dh_pubKey_nextNode, nextNode_ED25519_pubKey>
+    in
+    [
+        !ServiceNode(serviceNode_X25519_pubKey, serviceNode_X25519_prKey, serviceNode_ED25519_pubKey, serviceNode_ED25519_prKey, serviceNode_IP),
+        !ServiceNode(nextNode_X25519_pubKey, nextNode_X25519_prKey, nextNode_ED25519_pubKey, nextNode_ED25519_prKey, nextNode_IP),
+        ModelIn(last_step_IP, serviceNode_IP, <senc(data_for_inner_layer, symKey), dh_pubKey, serviceNode_ED25519_pubKey>, flow)
+    ]
+        --[ MessageForwarded(serviceNode_IP, flow) ]->
+    [ ModelOut(serviceNode_IP, nextNode_IP, data_for_inner_layer, flow) ]
+
+restriction Only3Hops :
+    "All flow node1 node2 node3 #t1 #t2 #t3 .
+        (MessageForwarded(node1, flow) @ #t1 &
+        MessageForwarded(node2, flow) @ #t2 &   
+        MessageForwarded(node3, flow) @ #t3) ==>
+            (#t1 = #t2 | #t1 = #t3 | #t2 = #t3)"
+
+rule StoreMessage :
+    let
+        symKey = dh_pubKey^serviceNode_X25519_prKey
+    in
+    [
+        !ServiceNode(serviceNode_X25519_pubKey, serviceNode_X25519_prKey, serviceNode_ED25519_pubKey, serviceNode_ED25519_prKey, serviceNode_IP),
+        ModelIn(second_node_IP, serviceNode_IP, <senc(<'store', message>, symKey), dh_pubKey, serviceNode_ED25519_pubKey>, flow)
+    ]
+    --[ MessageStored(serviceNode_IP, message) ]->
+    []
+
+lemma SanityCheck :
+    exists-trace
+    "Ex #i #j sender node message .
+        MessageSent(sender, node, message) @ #i &
+        MessageStored(node, message) @ #j &
+        #i < #j"
+
+lemma Secrecy :
+    "not (
+        Ex sender node message #i #j #k .
+            MessageSent(sender, node, message) @ #i &
+            MessageStored(node, message) @ #j &
+            K(message) @ #k &
+            not(Ex #d . Dishonest(node) @ #d)
+    )"
+
+lemma RelationshipAnonoymity :
+    "not (
+        Ex sender node message #i #j #k .
+            MessageSent(sender, node, message) @ #i &
+            MessageStored(node, message) @ #j &
+            K(sender) @ #k & K(node) @ #k
+    )"
+
+lemma SenderAnonymity :
+    "not (
+        Ex #x #y sender .
+            Sender(sender) @ #x &
+            K(sender) @ #y &
+            (not Ex #w #z guard proxy receiver .
+                MessageSentThroughPath(sender, guard, proxy, receiver) @ #w &
+                Dishonest(guard) @ #z)
+    )"
+
+end

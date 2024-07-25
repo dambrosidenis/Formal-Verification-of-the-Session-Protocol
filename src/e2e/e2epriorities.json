@@ -1,0 +1,38 @@
+{
+    "MessageSecrecy" : [
+        "!KU( ~ephemeral_prKey )",
+        "!KU(~client_X25519_prKey.1 )",
+        "!KU('g'^(~ephemeral_prKey*~client_X25519_prKey.1) )",
+        "!KU(“timestamp )",
+        "!KU( ~plaintext )"
+    ],
+
+    "Authenticity" : [
+        "!KU( ~client_ED25519_prKkey )",
+        "!KU( sign(<<plaintext, ~timestamp, options>,",
+        "!Client( bob_X25519_prKey, bob_X25519_pubKey, bob_ED25519_prKey,",
+        "!KU( senc(<'retrieve',",
+        "!KU( senc(<'store',",
+        "!KU( senc(<'new_messages'",
+        "!KU( senc(<"
+    ],
+
+    "AntiReplay" : [
+        "!KU( ~client_ED25519_prKey )",
+        "!KU( ~client_ED25519_prKey.2 )",
+        "!KU( sign(<<message, ~timestamp, options>,",
+        "!KU( sign(~timestamp.1, ~client_ED25519_prKey.2)",
+        "!Client( bob_X25519_prKey, bob_X25519_pubKey, bob_ED25519_prKey,",
+        "!KU( senc(<'retrieve',",
+        "!KU( senc(<'store',",
+        "!KU( senc(<'new_messages'",
+        "!KU( senc(<"
+    ],
+
+    "SenderAnonymity" : [
+        "!KU( ~ephemeral_prKey )",
+        "!KU( ~client_X25519_prKey.1 )",
+        "!KU( 'g'^(~ephemeral_prKey*~client_X25519_prKey.1"
+    ]
+}
+

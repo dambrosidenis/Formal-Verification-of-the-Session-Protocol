@@ -1,0 +1,26 @@
+# This CITATION.cff file was generated with cffinit.
+# Visit https://bit.ly/cffinit to generate yours today!
+
+cff-version: 1.2.0
+title: >-
+  Formal Verification of the Session Protocol in the
+  Symbolic Model
+message: >-
+  If you use this software, please cite it using the
+  metadata from this file.
+type: software
+authors:
+  - given-names: Denis
+    family-names: D'Ambrosi
+    email: dambrosidenis@gmail.com
+    affiliation: University of Udine
+    orcid: 'https://orcid.org/0009-0001-2275-6496'
+repository-code: >-
+  https://github.com/dambrosidenis/Formal-Verification-of-the-Session-Protocol
+keywords:
+  - Formal Verification
+  - Formal Methods
+  - Dolev Yao
+  - Cryptographic Protocols
+  - Symbolic Model
+license: MIT

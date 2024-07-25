@@ -1,0 +1,330 @@
+theory session_e2e begin 
+
+/*
+ *  Author: Denis D'Ambrosi
+ *  Theory file: e2e.spthy
+ *  Status: Working (Tested with Tamarin 1.6.1)
+ */
+
+builtins: asymmetric-encryption, hashing, symmetric-encryption, diffie-hellman, signing
+
+heuristic: o "e2eoracle.py"
+
+rule ChannelOut_S :
+    [ SecureOut(sender, receiver, message) ] --> [ Sec(sender, receiver, message) ]
+
+rule ChannelIn_S :
+    [ Sec(sender, receiver, message) ] --> [ SecureIn(sender, receiver, message) ]
+
+rule InitialiseSeedNode :
+    let 
+        seedNode_pubKey = pk(~seedNode_prKey)
+        seedNode_cert = aenc(<~seedNode_identity, seedNode_pubKey>, ~seedNode_prKey)
+    in
+    [
+        Fr(~seedNode_prKey),
+        Fr(~seedNode_identity)
+    ]
+    -->
+    [
+        !SeedNode(~seedNode_prKey, seedNode_pubKey, ~seedNode_identity, seedNode_cert),
+        Out(<~seedNode_identity, seedNode_cert, seedNode_pubKey>)
+    ]
+
+rule InitialiseClient :
+    let
+    client_X25519_pubKey = 'g'^~client_X25519_prKey
+    client_ED25519_pubKey = pk(~client_ED25519_prKey)
+    swarmNode_X25519_pubKey = 'g'^~swarmNode_X25519_prKey
+    swarmNode_ED25519_pubKey = pk(~swarmNode_ED25519_prKey)
+    in
+    [
+        Fr(~client_X25519_prKey),
+        Fr(~client_ED25519_prKey),
+        Fr(~swarmNode_X25519_prKey),
+        Fr(~swarmNode_ED25519_prKey),
+        !SeedNode(seedNode_prKey, seedNode_pubKey, seedNode_identity, seedNode_cert)
+    ]
+    --[
+        IsAClient(client_ED25519_pubKey),
+        ClientsSwarm(client_ED25519_pubKey, swarmNode_ED25519_pubKey)
+    ]->
+    [
+        !Client(~client_X25519_prKey, client_X25519_pubKey, ~client_ED25519_prKey, client_ED25519_pubKey),
+        !ClientSeedNode(client_ED25519_pubKey, seedNode_pubKey),
+        !SwarmNode(client_ED25519_pubKey, ~swarmNode_X25519_prKey, swarmNode_X25519_pubKey, ~swarmNode_ED25519_prKey, swarmNode_ED25519_pubKey)
+    ]
+
+rule SendServiceNodeRequest :
+    [
+        !Client(client_X25519_prKKey, client_X25519_pubKey, client_ED25519_prKey, client_ED25519_pubKey),
+        !ClientSeedNode(client_ED25519_pubKey, seedNode_pubKey)
+    ]
+    -->
+    [
+        SentServiceNodeRequest (client_ED25519_pubKey, seedNode_pubKey),
+        SecureOut (client_ED25519_pubKey, seedNode_pubKey, 'get_serviceNodes')
+    ]
+
+rule AnswerServiceNodeRequest :
+    let
+        serviceNode_X25519_pubKey = 'g'^~serviceNode_X25519_prKey
+        serviceNode_ED25519_pubKey = pk(~serviceNode_ED25519_prKey)
+        serviceNode_information = <serviceNode_ED25519_pubKey, serviceNode_X25519_pubKey, seedNode_cert>
+    in
+    [
+        !SeedNode(seedNode_prKey, seedNode_pubKey, seedNode_identity, seedNode_cert),
+        SecureIn(client_ED25519_pubKey, seedNode_pubKey, 'get_serviceNodes'),
+        Fr(~serviceNode_X25519_prKey),
+        Fr(~serviceNode_ED25519_prKey)
+    ]
+    -->
+    [
+        !ServiceNode(~serviceNode_X25519_prKey, serviceNode_X25519_pubKey, ~serviceNode_ED25519_prKey, serviceNode_ED25519_pubKey),
+        SecureOut(seedNode_pubKey, client_ED25519_pubKey, serviceNode_information)
+    ]
+
+rule ReceiveServiceNodeResponse :
+    [
+        !Client(client_X25519_prKKey, client_X25519_pubKey, client_ED25519_prKey, client_ED25519_pubKey),
+        !ClientSeedNode(client_ED25519_pubKey, seedNode_pubKey),
+        !SeedNode(seedNode_prKey, seedNode_pubKey, seedNode_identity, seedNode_cert),
+        SentServiceNodeRequest (client_ED25519_pubKey, seedNode_pubKey),
+        SecureIn(seedNode_pubKey, client_ED25519_pubKey, <serviceNode_ED25519_pubKey, serviceNode_X25519_pubKey, seedNode_cert>)
+    ]
+    -->
+    [   ClientReadyToQuery(client_ED25519_pubKey, serviceNode_ED25519_pubKey, serviceNode_X25519_pubKey) ]
+
+rule SendSwarmRequest :
+    let
+        k = serviceNode_X25519_pubKey^~ECDH_prKey
+        ECDH_pubKey = 'g'^~ECDH_prKey
+    in
+    [
+        ClientReadyToQuery(client_ED25519_pubKey, serviceNode_ED25519_pubKey, serviceNode_X25519_pubKey),
+        !Client (bob_X25519_prKey, bob_X25519_pubKey, bob_ED25519_prKey, bob_ED25519_pubKey),
+        Fr(~ECDH_prKey)
+    ]
+    --[ QueryForSwarm(bob_ED25519_pubKey) ]->
+    [
+        SentSwarmRequest (client_ED25519_pubKey, bob_ED25519_pubKey, serviceNode_ED25519_pubKey, k),
+        Out(<senc(<'get_swarm', bob_ED25519_pubKey>, k), ECDH_pubKey, serviceNode_ED25519_pubKey>)
+    ]
+
+rule AnswerSwarmRequest :
+    let
+        k = ECDH_pubKey^serviceNode_X25519_prKey
+    in
+    [
+        !ServiceNode (serviceNode_X25519_prKey, serviceNode_X25519_pubKey, serviceNode_ED25519_prKKey, serviceNode_ED25519_pubKey),
+        !SwarmNode(bob_ED25519_pubKey, swarmNode_X25519_prKey, swarmNode_X25519_pubKey, swarmNode_ED25519_prKey, swarmNode_ED25519_pubKey),
+        In(<senc(<'get_swarm', bob_ED25519_pubKey>, k), ECDH_pubKey, serviceNode_ED25519_pubKey>)
+    ]
+    -->
+    [   Out(senc(<'requested_swarm', swarmNode_ED25519_pubKey, swarmNode_X25519_pubKey>, k)) ]
+
+
+rule ReceiveSwarmResponse :
+    [
+        SentSwarmRequest(client_ED25519_pubKey, bob_ED25519_pubKey, serviceNode_X25519_pubKey, k),
+        In(senc(<'requested_swarm', swarmNode_ED25519_pubKey, swarmNode_X25519_pubKey>, k))
+    ]
+    -->
+    [   ClientReadyToSend(client_ED25519_pubKey, bob_ED25519_pubKey, swarmNode_ED25519_pubKey, swarmNode_X25519_pubKey) ]
+
+rule CreateMessage :
+    [
+        !Client(alice_X25519_prKey, alice_X25519_pubKey, alice_ED25519_prKey, alice_ED25519_pubKey),
+        !Client (bob_X25519_prkKey, bob_X25519_pubKey, bob_ED25519_prKey, bob_ED25519_pubKey),
+        Fr(~plaintext)
+    ]
+    -->
+    [   MessageToSend(alice_ED25519_pubKey, bob_ED25519_pubKey, ~plaintext) ]
+
+rule SendMessage :
+    let
+        message = <plaintext, ~timestamp, ~options>
+        signature = sign(<message, alice_ED25519_pubKey, bob_X25519_pubKey>, alice_ED25519_prKey)
+        box = <message, alice_ED25519_pubKey, signature>
+        ephemeral_Key = 'g'^~ephemeral_prKey
+        symKey = bob_X25519_pubKey^~ephemeral_prKey
+        nonce = h(<ephemeral_Key, bob_X25519_pubKey>)
+        encKey = <symKey, nonce>
+        sealed_box = <ephemeral_Key, senc(box, encKey)>
+        swarm_node_data = <sealed_box, bob_ED25519_pubKey, ~timestamp, ~ttl>
+        k = swarmNode_X25519_pubKey^~ECDH_prKey
+        ECDH_pubKey = 'g'^~ECDH_prKey
+        data_sent = <ECDH_pubKey, senc(<'store', swarm_node_data>, k), swarmNode_ED25519_pubKey>
+    in
+    [
+        MessageToSend(alice_ED25519_pubKey, bob_E025519_pubKey, plaintext),
+        ClientReadyToSend(alice_ED25519_pubKey, bob_ED25519_pubKey, swarmNode_ED25519_pubKey, swarmNode_X25519_pubKey),
+        !SwarmNode(bob_ED25519_pubKey, swarmNode_X25519_prKey, swarmNode_X25519_pubKey, swarmNode_ED25519_prKey, swarmNode_ED25519_pubKey),
+        !Client(alice_X25519_prKey, alice_X25519_pubKey, alice_ED25519_prKey, alice_ED25519_pubKey),
+        !Client (bob_X25519_prKey, bob_X25519_pubKey, bob_ED25519_prKey, bob_ED25519_pubKey) ,
+        Fr(~timestamp), Fr(~ttl), Fr(~options),
+        Fr(~ECDH_prKey), Fr(~ephemeral_prKey)
+    ]
+    --[
+        StoreSent(data_sent, swarmNode_ED25519_pubKey) ,
+        SealedBoxSent(alice_ED25519_pubKey, bob_ED25519_pubKey, sealed_box),
+        BoxSent(alice_ED25519_pubKey, bob_ED25519_pubKey, box),
+        MessageSentWithTimestamp(alice_ED25519_pubKey, bob_ED25519_pubKey, plaintext, ~timestamp),
+        SentBoxToSwarm(bob_ED25519_pubKey, swarmNode_ED25519_pubKey)
+    ]->
+    [
+        MessageWaitingForConfirm(alice_ED25519_pubKey, bob_ED25519_pubKey, plaintext, k),
+        Out(data_sent)
+    ]
+
+rule AnswerMessageSent :
+    let
+        k = ECDH_pubKey^swarmNode_X25519_prKey
+        hash = h(sealed_box)
+        data_arrived = <ECDH_pubKey, senc(<'store', <sealed_box, bob_ED25519_pubKey, ~timestamp, ttl>>, k), swarmNode_ED25519_pubKey>
+    in
+    [
+        !SwarmNode (bob_ED25519_pubKey, swarmNode_X25519_prKey, swarmNode_X25519_pubKey, swarmNode_ED25519_prKey, swarmNode_ED25519_pubKey),
+        In(data_arrived)
+    ]
+    --[ StoreArrived(data_arrived, swarmNode_ED25519_pubKey) ]->
+    [
+        !StoredMessage(swarmNode_ED25519_pubKey, sealed_box, hash, bob_ED25519_pubKey),
+        Out(senc('received', k))
+    ]
+
+rule ReceiveSentMessageResponse :
+    [
+        MessageWaitingForConfirm(alice_ED25519_pubKey, bob_ED25519_pubKey, plaintext, k),
+        In(senc('received', k))
+    ] --> []
+
+rule RetrieveMessage :
+    let
+        k = swarmNode_X25519_pubKey^~ECDH_prKey
+        ECDH_pubKey = 'g'^~ECDH_prKey
+        nonce = sign(~timestamp, bob_ED25519_prKey)
+    in
+    [
+        !Client (bob_X25519_prKey, bob_X25519_pubKey, bob_ED25519_prKey, bob_ED25519_pubKey),
+        ClientReadyToSend(bob_ED25519_pubKey, bob_ED25519_pubKey, swarmNode_ED25519_pubKey, swarmNode_X25519_pubKey),
+        !SwarmNode(bob_ED25519_pubKey, swarmNode_X25519_prKey, swarmNode_X25519_pubKey, swarmNode_ED25519_prKey, swarmNode_ED25519_pubKey),
+        Fr(~ECDH_prKey), Fr(~timestamp)
+    ]
+    -->
+    [
+        SentRetrievalRequest (bob_ED25519_pubKey, swarmNode_ED25519_pubKey, k),
+        Out(<ECDH_pubKey, senc(<'retrieve', nonce, bob_ED25519_pubKey>, k), swarmNode_ED25519_pubKey>)
+    ]
+
+rule AnswerRetrieveRequest :
+    let
+        k = ECDH_pubKey^swarmNode_X25519_prKey
+        nonce = sign(~timestamp, bob_ED25519_prKey)
+        bob_ED25519_pubKey = pk(bob_ED25519_prKey)
+    in
+    [
+        !SwarmNode (bob_ED25519_pubKey, swarmNode_X25519_prKey, swarmNode_X25519_pubKey, swarmNode_ED25519_prKey, swarmNode_ED25519_pubKey),
+        !StoredMessage(swarmNode_ED25519_pubKey, sealed_box, hash, bob_ED25519_pubKey),
+        In(<ECDH_pubKey, senc(<'retrieve', nonce, bob_ED25519_pubKey>, k), swarmNode_ED25519_pubKey>)
+    ]
+    -->
+    [   Out(senc(<'new_messages', sealed_box>, k)) ]
+
+rule ReceiveRetrieveResponse :
+    let
+        message = <plaintext, ~timestamp, options>
+        alice_ED25519_pubKey = pk(alice_ED25519_prKey)
+        signature = sign(<message, alice_ED25519_pubKey, bob_X25519_pubKey>, alice_ED25519_prKey)
+        box = <message, alice_ED25519_pubKey, signature>
+        ephemeral_Key = 'g'^~ephemeral_prKey
+        symKey = bob_X25519_pubKey^~ephemeral_prKey
+        nonce = h(<ephemeral_Key, bob_X25519_pubKey>)
+        encKey = <symKey, nonce>
+        sealed_box = <ephemeral_Key, senc(box, encKey)>
+    in
+    [
+        SentRetrievalRequest (bob_ED25519_pubKey, swarmNode_ED25519_pubKey, k),
+        !Client(bob_X25519_prKey, bob_X25519_pubKey, bob_ED25519_prKey, bob_ED25519_pubKey),
+        In(senc(<'new_messages', sealed_box>, k))
+    ]
+    --[
+        SealedBoxReceived(alice_ED25519_pubKey, bob_ED25519_pubKey, sealed_box),
+        BoxReceived(alice_ED25519_pubKey, bob_ED25519_pubKey, box),
+        MessageReceivedWithTimestamp(alice_ED25519_pubKey, bob_ED25519_pubKey, plaintext, ~timestamp)
+    ]-> []
+
+rule PublicClient:
+    [   !Client(client_X25519_prKey, client_X25519_pubKey, client_ED25519_prKey, client_ED25519_pubKey) ]
+    --[ PublicKeys(client_ED25519_pubKey) ]->
+    [   Out(<client_ED25519_pubKey, client_X25519_pubKey>) ]
+
+rule DishonestClient :
+    [   !Client(client_X25519_prKey, client_X25519_pubKey, client_ED25519_prKey, client_ED25519_pubKey) ]
+    --[ Compromised(client_ED25519_pubKey) ]->
+    [   Out(<client_X25519_prKey, client_X25519_pubKey, client_ED25519_prKey, client_ED25519_pubKey>) ]
+
+rule DishonestSwarmNode :
+    [ !SwarmNode(bob_ED25519_pubKey, swarmNode_X25519_prKey, swarmNode_X25519_pubKey, swarmNode_ED25519_prKey, swarmNode_ED25519_pubKey) ]
+    --[ Dishonest (swarmNode_ED25519_pubKey) ]->
+    [ Out(<swarmNode_X25519_prKey, swarmNode_X25519_pubKey, swarmNode_ED25519_prKey, swarmNode_ED25519_pubKey>) ]
+
+rule DishonestServiceNode :
+    [ !ServiceNode(serviceNode_X25519_prKey, serviceNode_X25519_pubKey, serviceNode_ED25519_prKey, serviceNode_ED25519_pubKey) ]
+    --[ Dishonest (serviceNode_ED25519_pubKey) ]->
+    [ Out(<serviceNode_X25519_prKey, serviceNode_X25519_pubKey, serviceNode_ED25519_prKey, serviceNode_ED25519_pubKey>) ]
+
+restriction SendTheMessageToTheRightNode :
+    "All #t bob swarm . SentBoxToSwarm(bob, swarm) @ #t ==> Ex #t1 . ClientsSwarm(bob, swarm) @ #t1"
+
+lemma types [sources] :
+    "All #t data swarm . StoreArrived(data, swarm) @ #t ==>
+        ((Ex #x . StoreSent(data, swarm) @ #x & #x < #t) |
+        (Ex #y . KU(data) @ #y & KU(swarm) @ #y & #y < #t))"
+
+lemma SanityCheck :
+    exists-trace
+    "Ex #a #b alice bob box .
+        SealedBoxSent(alice, bob, box) @ #a &
+        SealedBoxReceived(alice, bob, box) @ #b &
+        (#a < #b)"
+
+lemma MessageSecrecy :
+    "not(
+        Ex #a #b #k alice bob box .
+            (not Ex #c . Compromised(bob) @ #c) &
+            BoxSent(alice, bob, box) @ #a &
+            BoxReceived(alice, bob, box) @ #b &
+            K(box) @ #k
+    )"
+
+lemma Authenticity :
+    "not(
+        Ex #i alice bob box .
+        (Ex #c . IsAClient(alice) @ #c) &
+        not (Ex #d . Compromised(alice) @ #d) &
+        BoxReceived(alice, bob, box) @ #i &
+        not (Ex #j . BoxSent(alice, bob, box) @ #j & #j < #i)
+    )"
+
+lemma AntiReplay :
+    "not (
+        Ex #i alice bob message timestamp .    
+            (Ex #c . IsAClient(alice) @ #c) &
+            not (Ex #c . Compromised(alice) @ #c) &
+            MessageReceivedWithTimestamp(alice, bob, message, timestamp) @ #i &
+            not (Ex #j . MessageSentWithTimestamp(alice, bob, message, timestamp) @ #j)
+    )"
+
+lemma SenderAnonymity :
+    "not (
+        Ex alice #t .
+            IsAClient(alice) @ #t &
+            not(Ex bob box #t #c . BoxSent(alice, bob, box) @ #t & Compromised(bob) @ #c) &
+            not(Ex #c . PublicKeys(alice) @ #c) &
+            not(Ex #c . Compromised(alice) @ #c) &
+            not(Ex #c . QueryForSwarm(alice) @ #c) &
+            (Ex #k . K(alice) @ #k)
+    )"
+
+end
